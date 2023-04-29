@@ -1,6 +1,5 @@
 using System;
 using System.Runtime.CompilerServices;
-using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Rendering;
 
@@ -99,10 +98,6 @@ public class VoxelChunk : MonoBehaviour
     private const int BaseY = 50;
     private const float AmplitudeY = Height - BaseY;
     private const float NoiseScale = 0.003f;
-    private const float IslandRadius = Size * VoxelWorld.SizeInChunks * 0.5f;
-    private const float IslandRadiusSquared = IslandRadius * IslandRadius;
-    private const float InverseIslandRadiusSquared = 1f / IslandRadiusSquared;
-    private const float IslandCenter = Size * VoxelWorld.SizeInChunks * 0.5f;
 
     public int ChunkX, ChunkY, ChunkZ;
 
@@ -111,13 +106,11 @@ public class VoxelChunk : MonoBehaviour
     private Mesh _mesh;
     private byte[] _voxels = new byte[VoxelCount];
 
-    private Task _task;
+    private Tesselator _tesselator = new();
 
     // Used to reduce the amount of meshing required, ie:
     // don't mesh into the sky if the sky is full of empty space.
     public int MaxOccupiedY { get; private set; }
-
-    public bool IsDirty { get; private set; }
 
     public void Init()
     {
@@ -136,7 +129,7 @@ public class VoxelChunk : MonoBehaviour
             max = new Vector3(Size, Height, Size)
         };
         _mesh.bounds = bounds;
-
+        
         Generate();
     }
 
@@ -175,49 +168,51 @@ public class VoxelChunk : MonoBehaviour
 
     // Called at the end of a run.
     private void GenerateFaces(int runStart, int runStartYPos, int runStartYNeg, int runStartZPos, int runStartZNeg,
-        int runEnd, int globalY, int globalZ, VoxelWorld voxelWorld, Tesselator tesselator)
+        int runEnd, int globalY, int globalZ, VoxelWorld voxelWorld)
     {
         if (voxelWorld.GetVoxel(runEnd + 1, globalY, globalZ) == 0)
         {
-            GenerateFace((int)Direction.XPos, runEnd, globalY, globalZ, tesselator);
+            GenerateFace((int)Direction.XPos, runEnd, globalY, globalZ);
         }
 
         if (voxelWorld.GetVoxel(runStart - 1, globalY, globalZ) == 0)
         {
-            GenerateFace((int)Direction.XNeg, runStart, globalY, globalZ, tesselator);
+            GenerateFace((int)Direction.XNeg, runStart, globalY, globalZ);
         }
 
         if (runStartYPos != -1)
         {
             var runLength = runEnd - runStartYPos;
-            GenerateFaceWithLength((int)Direction.YPos, runLength, runStartYPos, globalY, globalZ, tesselator);
+            GenerateFaceWithLength((int)Direction.YPos, runLength, runStartYPos, globalY, globalZ);
         }
 
         if (runStartYNeg != -1)
         {
             var runLength = runEnd - runStartYNeg;
-            GenerateFaceWithLength((int)Direction.YNeg, runLength, runStartYNeg, globalY, globalZ, tesselator);
+            GenerateFaceWithLength((int)Direction.YNeg, runLength, runStartYNeg, globalY, globalZ);
         }
 
         if (runStartZPos != -1)
         {
             var runLength = runEnd - runStartZPos;
-            GenerateFaceWithLength((int)Direction.ZPos, runLength, runStartZPos, globalY, globalZ, tesselator);
+            GenerateFaceWithLength((int)Direction.ZPos, runLength, runStartZPos, globalY, globalZ);
         }
 
         if (runStartZNeg != -1)
         {
             var runLength = runEnd - runStartZNeg;
-            GenerateFaceWithLength((int)Direction.ZNeg, runLength, runStartZNeg, globalY, globalZ, tesselator);
+            GenerateFaceWithLength((int)Direction.ZNeg, runLength, runStartZNeg, globalY, globalZ);
         }
     }
 
-    public void Mesh(VoxelWorld voxelWorld, Tesselator tesselator)
+    public void Mesh(VoxelWorld voxelWorld)
     {
-        IsDirty = false;
-
-        tesselator.VertexCount = 0;
-        tesselator.IndexCount = 0;
+        _tesselator.Vertices.Clear();
+        _tesselator.Colors.Clear();
+        _tesselator.Indices.Clear();
+        
+        _tesselator.VertexCount = 0;
+        _tesselator.IndexCount = 0;
 
         for (var localZ = 0; localZ < Size; ++localZ)
         {
@@ -240,24 +235,11 @@ public class VoxelChunk : MonoBehaviour
 
                     if (voxel == 0 && !inRun) continue;
 
-                    // if (localX == Size - 1 && inRun)
-                    // {
-                    //     // End run:
-                    //     GenerateFaces(runStart, runStartYPos, runStartYNeg, runStartZPos, runStartZNeg, globalX,
-                    //         globalY, globalZ, voxelWorld, tesselator);
-                    //     runStartYPos = -1;
-                    //     runStartYNeg = -1;
-                    //     runStartZPos = -1;
-                    //     runStartZNeg = -1;
-                    //     inRun = false;
-                    //     continue;
-                    // }
-
                     if (voxel == 0)
                     {
                         // End run:
                         GenerateFaces(runStart, runStartYPos, runStartYNeg, runStartZPos, runStartZNeg, globalX - 1,
-                            globalY, globalZ, voxelWorld, tesselator);
+                            globalY, globalZ, voxelWorld);
                         runStartYPos = -1;
                         runStartYNeg = -1;
                         runStartZPos = -1;
@@ -284,63 +266,58 @@ public class VoxelChunk : MonoBehaviour
                 {
                     // End run:
                     GenerateFaces(runStart, runStartYPos, runStartYNeg, runStartZPos, runStartZNeg, ChunkX + Size - 1,
-                        globalY, globalZ, voxelWorld, tesselator);
+                        globalY, globalZ, voxelWorld);
                 }
             }
         }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void GenerateFace(int directionI, int x, int y, int z, Tesselator tesselator)
+    private void GenerateFace(int directionI, int x, int y, int z)
     {
         for (var i = 0; i < 6; i++)
         {
-            tesselator.Indices[tesselator.IndexCount] = FaceIndices[directionI][i] + tesselator.VertexCount;
-            ++tesselator.IndexCount;
+            _tesselator.Indices.Add(FaceIndices[directionI][i] + _tesselator.VertexCount);
+            ++_tesselator.IndexCount;
         }
         
         var position = new Vector3(x, y, z);
         for (var i = 0; i < 4; i++)
         {
-            tesselator.Vertices[tesselator.VertexCount] = FaceVertices[directionI][i] + position;
-            tesselator.Colors[tesselator.VertexCount] = FaceColors[directionI];
-            ++tesselator.VertexCount;
+            _tesselator.Vertices.Add(FaceVertices[directionI][i] + position);
+            _tesselator.Colors.Add(FaceColors[directionI]);
+            ++_tesselator.VertexCount;
         }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private void GenerateFaceWithLength(int directionI, int length, int x, int y, int z, Tesselator tesselator)
+    private void GenerateFaceWithLength(int directionI, int length, int x, int y, int z)
     {
         for (var i = 0; i < 6; i++)
         {
-            tesselator.Indices[tesselator.IndexCount] = FaceIndices[directionI][i] + tesselator.VertexCount;
-            ++tesselator.IndexCount;
+            _tesselator.Indices.Add(FaceIndices[directionI][i] + _tesselator.VertexCount);
+            ++_tesselator.IndexCount;
         }
         
-        tesselator.Colors[tesselator.VertexCount] = FaceColors[directionI];
-        tesselator.Colors[tesselator.VertexCount + 1] = FaceColors[directionI];
-        tesselator.Colors[tesselator.VertexCount + 2] = FaceColors[directionI];
-        tesselator.Colors[tesselator.VertexCount + 3] = FaceColors[directionI];
+        _tesselator.Colors.Add(FaceColors[directionI]);
+        _tesselator.Colors.Add(FaceColors[directionI]);
+        _tesselator.Colors.Add(FaceColors[directionI]);
+        _tesselator.Colors.Add(FaceColors[directionI]);
 
         var startPosition = new Vector3(x, y, z);
         var endPosition = new Vector3(x + length, y, z);
-        tesselator.Vertices[tesselator.VertexCount] = FaceVertices[directionI][0] + startPosition;
-        tesselator.Vertices[tesselator.VertexCount + 1] = FaceVertices[directionI][1] + startPosition;
-        tesselator.Vertices[tesselator.VertexCount + 2] = FaceVertices[directionI][2] + endPosition;
-        tesselator.Vertices[tesselator.VertexCount + 3] = FaceVertices[directionI][3] + endPosition;
-        tesselator.VertexCount += 4;
+        _tesselator.Vertices.Add(FaceVertices[directionI][0] + startPosition);
+        _tesselator.Vertices.Add(FaceVertices[directionI][1] + startPosition);
+        _tesselator.Vertices.Add(FaceVertices[directionI][2] + endPosition);
+        _tesselator.Vertices.Add(FaceVertices[directionI][3] + endPosition);
+        _tesselator.VertexCount += 4;
     }
 
-    public void Swap(Tesselator tesselator)
+    public void Swap()
     {
         _mesh.Clear();
-        _mesh.SetVertices(tesselator.Vertices, 0, tesselator.VertexCount, MeshUpdateFlags.DontValidateIndices);
-        _mesh.SetColors(tesselator.Colors, 0, tesselator.VertexCount);
-        _mesh.SetIndices(tesselator.Indices, 0, tesselator.IndexCount, MeshTopology.Triangles, 0, false);
-    }
-
-    public void MarkDirty()
-    {
-        IsDirty = true;
+        _mesh.SetVertices(_tesselator.Vertices, 0, _tesselator.VertexCount, MeshUpdateFlags.DontValidateIndices);
+        _mesh.SetColors(_tesselator.Colors, 0, _tesselator.VertexCount);
+        _mesh.SetIndices(_tesselator.Indices, 0, _tesselator.IndexCount, MeshTopology.Triangles, 0, false);
     }
 }

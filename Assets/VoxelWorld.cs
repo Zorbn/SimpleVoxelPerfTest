@@ -1,65 +1,52 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.Diagnostics;
 using System.Threading;
 using UnityEngine;
-using Debug = UnityEngine.Debug;
 
 public class VoxelWorld : MonoBehaviour
 {
-    // private struct FinishedTesselator
-    // {
-    //     public Tesselator Tesselator;
-    //     public VoxelChunk Chunk;
-    // }
-
     public const int SizeInChunks = 40;
     private const int RadiusInChunks = SizeInChunks / 2;
     private const int Size = SizeInChunks * VoxelChunk.Size;
     private const int Height = VoxelChunk.Height;
     private const int ChunkCount = SizeInChunks * SizeInChunks;
-    private const int MaxTesselators = 10;
 
     [SerializeField] private Transform player;
     [SerializeField] private GameObject chunkPrefab;
 
     private Vector3Int _playerChunkPosition;
 
-    private VoxelChunk[] _oldChunks = new VoxelChunk[ChunkCount];
-    private VoxelChunk[] _chunks = new VoxelChunk[ChunkCount];
+    private readonly VoxelChunk[] _oldChunks = new VoxelChunk[ChunkCount];
+    private readonly VoxelChunk[] _chunks = new VoxelChunk[ChunkCount];
 
-    private readonly Tesselator _tesselator = new();
-    // private readonly ConcurrentQueue<Tesselator> _availableTesselators = new();
-    // private readonly ConcurrentQueue<FinishedTesselator> _finishedTesselators = new();
+    private readonly List<VoxelChunk> _nextMeshingJobs = new();
+    private readonly ConcurrentQueue<VoxelChunk> _meshingJobs = new();
+    private readonly ConcurrentQueue<VoxelChunk> _swappingJobs = new();
 
-    // private Thread _meshingThread;
-
-    // private const int NoChunk = -1;
-    // private int _chunkNeedingSwap = NoChunk;
-
-    private Stopwatch _stopwatch = new();
+    private Thread _meshingThread;
 
     private void Start()
     {
         player.transform.position = new Vector3(Size * 0.5f, 0, Size * 0.5f);
         UpdateLoadedChunks();
 
-        // for (var z = 0; z < SizeInChunks; ++z)
-        // {
-        //     for (var x = 0; x < SizeInChunks; ++x)
-        //     {
-        //         var newChunkObject = Instantiate(chunkPrefab);
-        //         var newChunk = newChunkObject.GetComponent<VoxelChunk>();
-        //         newChunk.ChunkX = VoxelChunk.Size * x;
-        //         newChunk.ChunkZ = VoxelChunk.Size * z;
-        //         newChunk.Init();
-        //         newChunk.MarkDirty();
-        //         _chunks[x + z * SizeInChunks] = newChunk;
-        //     }
-        // }
-        
-        // UpdateLoadedChunks();
+        _meshingThread = new Thread(MeshingProc);
+        _meshingThread.Start();
+    }
+
+    private void MeshingProc()
+    {
+        while (true)
+        {
+            while (_meshingJobs.TryPeek(out var chunk))
+            {
+                chunk.Mesh(this);
+                _swappingJobs.Enqueue(chunk);
+
+                _meshingJobs.TryDequeue(out _);
+            }
+        }
     }
 
     private void UpdatePlayerChunkPosition()
@@ -69,13 +56,24 @@ public class VoxelWorld : MonoBehaviour
             (int)playerPosition.y / VoxelChunk.Height, (int)playerPosition.z / VoxelChunk.Size);
     }
 
+    // Checks if the chunk borders a chunk that is about to be loaded.
+    // Used when updating loaded chunks.
+    private bool BordersNewChunk(int x, int z)
+    {
+        if (x < 0 || x >= SizeInChunks || z < 0 || z >= SizeInChunks) return false;
+
+        return !_chunks[x + z * SizeInChunks];
+    }
+
     private void UpdateLoadedChunks()
     {
+        if (!_meshingJobs.IsEmpty || !_swappingJobs.IsEmpty) return;
+        
         var oldChunkPosition = _playerChunkPosition;
         UpdatePlayerChunkPosition();
-        
+
         if (_playerChunkPosition == oldChunkPosition) return;
-        
+
         var chunkMin = new Vector3Int(_playerChunkPosition.x - RadiusInChunks, _playerChunkPosition.y,
             _playerChunkPosition.z - RadiusInChunks);
         var chunkMax = new Vector3Int(_playerChunkPosition.x + RadiusInChunks, _playerChunkPosition.y,
@@ -113,6 +111,23 @@ public class VoxelWorld : MonoBehaviour
             }
         }
 
+        // Re-mesh old chunks that will border new chunks.
+        for (var z = 0; z < SizeInChunks; ++z)
+        {
+            for (var x = 0; x < SizeInChunks; ++x)
+            {
+                var chunkI = x + z * SizeInChunks;
+                
+                if (!_chunks[chunkI]) continue;
+                
+                if (BordersNewChunk(x + 1, z) || BordersNewChunk(x - 1, z) ||
+                    BordersNewChunk(x, z + 1) || BordersNewChunk(x, z - 1))
+                {
+                    _nextMeshingJobs.Add(_chunks[chunkI]);
+                }
+            }
+        }
+
         // Generate new chunks.
         for (var z = 0; z < SizeInChunks; ++z)
         {
@@ -123,47 +138,35 @@ public class VoxelWorld : MonoBehaviour
                 var chunkI = x + z * SizeInChunks;
 
                 if (_chunks[chunkI]) continue;
-                
+
                 var newChunkObject = Instantiate(chunkPrefab);
                 var newChunk = newChunkObject.GetComponent<VoxelChunk>();
                 newChunk.ChunkX = VoxelChunk.Size * relativeX;
                 newChunk.ChunkZ = VoxelChunk.Size * relativeZ;
                 newChunk.Init();
                 _chunks[chunkI] = newChunk;
-                newChunk.MarkDirty();
+                _nextMeshingJobs.Add(newChunk);
             }
         }
+
+        // TODO: Sort jobs so that nearest are first
+        foreach (var nextJob in _nextMeshingJobs)
+        {
+            _meshingJobs.Enqueue(nextJob);
+        }
+        
+        _nextMeshingJobs.Clear();
     }
 
     private void Update()
     {
         UpdateLoadedChunks();
         
-        var meshTime = 0.0;
-        var chunksMeshed = 0;
-        for (var i = 0; i < _chunks.Length; i++)
+        while (_swappingJobs.TryPeek(out var chunk))
         {
-            if (_chunks[i] && _chunks[i].IsDirty)
-            {
-                _stopwatch.Restart();
-                _chunks[i].Mesh(this, _tesselator);
-                _stopwatch.Stop();
-                meshTime += _stopwatch.Elapsed.TotalMilliseconds;
-                ++chunksMeshed;
-                _chunks[i].Swap(_tesselator);
-            }
-        }
-
-        if (chunksMeshed > 0)
-        {
-            Debug.Log($"Meshed {chunksMeshed} chunks in {meshTime} with an average of {meshTime / chunksMeshed}");
-        }
-
-        if (!Input.GetMouseButtonDown(0)) return;
-
-        foreach (var chunk in _chunks)
-        {
-            chunk.MarkDirty();
+            chunk.Swap();
+            
+            _swappingJobs.TryDequeue(out _);
         }
     }
 
@@ -179,7 +182,7 @@ public class VoxelWorld : MonoBehaviour
 
         if (chunkX < 0 || chunkX >= SizeInChunks || chunkZ < 0 || chunkZ >= SizeInChunks || y < 0 ||
             y >= Height) return 1;
-        
+
         var chunk = _chunks[chunkX + chunkZ * SizeInChunks];
 
         var localX = x & VoxelChunk.SizeAnd;
