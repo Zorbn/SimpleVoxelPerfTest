@@ -148,8 +148,23 @@ public class VoxelWorld : MonoBehaviour
                 _nextMeshingJobs.Add(newChunk);
             }
         }
+        
+        var playerX = _playerChunkPosition.x * VoxelChunk.Size;
+        var playerZ = _playerChunkPosition.z * VoxelChunk.Size;
+        
+        // Make sure that nearest chunks are meshed first.
+        _nextMeshingJobs.Sort((a, b) =>
+        {
+            var aDistanceX = a.ChunkX - playerX;
+            var aDistanceZ = a.ChunkZ - playerZ;
+            var aDistanceSquared = aDistanceX * aDistanceX + aDistanceZ * aDistanceZ;
+            var bDistanceX = b.ChunkX - playerX;
+            var bDistanceZ = b.ChunkZ - playerZ;
+            var bDistanceSquared = bDistanceX * bDistanceX + bDistanceZ * bDistanceZ;
 
-        // TODO: Sort jobs so that nearest are first
+            return aDistanceSquared.CompareTo(bDistanceSquared);
+        });
+
         foreach (var nextJob in _nextMeshingJobs)
         {
             _meshingJobs.Enqueue(nextJob);
@@ -172,8 +187,6 @@ public class VoxelWorld : MonoBehaviour
 
     public byte GetVoxel(int x, int y, int z)
     {
-        // if (x < 0 || y < 0 || z < 0 || x >= Size || y >= Height || z >= Size) return 1;
-
         var chunkX = x >> VoxelChunk.SizeShifts;
         var chunkZ = z >> VoxelChunk.SizeShifts;
 
