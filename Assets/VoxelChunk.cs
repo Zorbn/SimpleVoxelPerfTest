@@ -1,9 +1,8 @@
 using System;
-using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Rendering;
-using Debug = UnityEngine.Debug;
 
 [RequireComponent(typeof(MeshFilter))]
 [RequireComponent(typeof(MeshRenderer))]
@@ -22,6 +21,10 @@ public class VoxelChunk : MonoBehaviour
     private const int BaseY = 50;
     private const float AmplitudeY = Height - BaseY;
     private const float NoiseScale = 0.003f;
+    private const float IslandRadius = Size * VoxelWorld.SizeInChunks * 0.5f;
+    private const float IslandRadiusSquared = IslandRadius * IslandRadius;
+    private const float InverseIslandRadiusSquared = 1f / IslandRadiusSquared;
+    private const float IslandCenter = Size * VoxelWorld.SizeInChunks * 0.5f;
 
     public int ChunkX, ChunkY, ChunkZ;
 
@@ -33,25 +36,36 @@ public class VoxelChunk : MonoBehaviour
     // Used to reduce the amount of meshing required, ie:
     // don't mesh too far beneath the surface and don't
     // mesh into the sky if the sky is full of empty space.
-    public int MinVisibleY { get; private set; }
-    public int MaxVisibleY { get; private set; }
+    // public int MinVisibleY { get; private set; }
+    // public int MaxVisibleY { get; private set; }
+    
+    public bool IsDirty { get; private set; }
     
     private void Start()
     {
         _meshFilter = GetComponent<MeshFilter>();
         _meshRenderer = GetComponent<MeshRenderer>();
 
-        _mesh = new Mesh();
-        _mesh.indexFormat = IndexFormat.UInt32;
+        _mesh = new Mesh
+        {
+            indexFormat = IndexFormat.UInt32
+        };
         _meshFilter.sharedMesh = _mesh;
+        
+        var bounds = new Bounds
+        {
+            min = new Vector3(0, 0, 0),
+            max = new Vector3(Size, Height, Size)
+        };
+        _mesh.bounds = bounds;
 
         Generate();
     }
 
     private void Generate()
     {
-        MinVisibleY = Height;
-        MaxVisibleY = 0;
+        // MinVisibleY = Height;
+        // MaxVisibleY = 0;
         
         for (var x = -1; x < Size + 1; ++x)
         {
@@ -61,6 +75,10 @@ public class VoxelChunk : MonoBehaviour
                 var globalZ = ChunkZ + z;
                 
                 var height = (int)(BaseY + Mathf.PerlinNoise(globalX * NoiseScale, globalZ * NoiseScale) * AmplitudeY);
+                // var distX = globalX - IslandCenter;
+                // var distZ = globalZ - IslandCenter;
+                // var distSquared = distX * distX + distZ * distZ;
+                // height = (int)(height * AverageTerrainHeight(distSquared));
                 height = Mathf.Min(height, Height);
 
                 // The edges are only used for making sure Min/MaxVisibleY
@@ -73,13 +91,19 @@ public class VoxelChunk : MonoBehaviour
                     }
                 }
 
-                MinVisibleY = Math.Min(MinVisibleY, height);
-                MaxVisibleY = Math.Max(MaxVisibleY, height);
+                // MinVisibleY = Math.Min(MinVisibleY, height);
+                // MaxVisibleY = Math.Max(MaxVisibleY, height);
             }
         }
 
-        MinVisibleY = Math.Max(MinVisibleY - 1, 0);
-        MaxVisibleY = Math.Min(MaxVisibleY + 1, Height);
+        // MinVisibleY = Math.Max(MinVisibleY - 1, 0);
+        // MaxVisibleY = Math.Min(MaxVisibleY + 1, Height);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    private static float AverageTerrainHeight(float distanceSquared)
+    {
+        return (IslandRadiusSquared - distanceSquared) * InverseIslandRadiusSquared;
     }
 
     public byte GetVoxel(int x, int y, int z)
@@ -92,12 +116,15 @@ public class VoxelChunk : MonoBehaviour
     // NOTE: Only one tesselator is needed for all chunks.
     public void Mesh(VoxelWorld voxelWorld, Tesselator tesselator)
     {
-        var vertexCount = 0;
-        var indexCount = 0;
+        IsDirty = false;
+        
+        tesselator.VertexCount = 0;
+        tesselator.IndexCount = 0;
         
         for (var localZ = 0; localZ < Size; ++localZ)
         {
-            for (var localY = MinVisibleY; localY < MaxVisibleY; ++localY)
+            // for (var localY = MinVisibleY; localY < MaxVisibleY; ++localY)
+            for (var localY = 0; localY < Height; ++localY)
             {
                 for (var localX = 0; localX < Size; ++localX)
                 {
@@ -112,160 +139,166 @@ public class VoxelChunk : MonoBehaviour
                     bool needsXMinus = voxelWorld.GetVoxel(x - 1, y, z) == 0;
                     if (needsXMinus)
                     {
-                        tesselator.Vertices[vertexCount] = new Vector3(x, y, z);
-                        tesselator.Vertices[vertexCount + 1] = new Vector3(x, y, z + 1);
-                        tesselator.Vertices[vertexCount + 2] = new Vector3(x, y + 1, z + 1);
-                        tesselator.Vertices[vertexCount + 3] = new Vector3(x, y + 1, z);
+                        tesselator.Vertices[tesselator.VertexCount] = new Vector3(x, y, z);
+                        tesselator.Vertices[tesselator.VertexCount + 1] = new Vector3(x, y, z + 1);
+                        tesselator.Vertices[tesselator.VertexCount + 2] = new Vector3(x, y + 1, z + 1);
+                        tesselator.Vertices[tesselator.VertexCount + 3] = new Vector3(x, y + 1, z);
 
-                        tesselator.Indices[indexCount] = vertexCount;
-                        tesselator.Indices[indexCount + 1] = vertexCount + 1;
-                        tesselator.Indices[indexCount + 2] = vertexCount + 2;
-                        tesselator.Indices[indexCount + 3] = vertexCount;
-                        tesselator.Indices[indexCount + 4] = vertexCount + 2;
-                        tesselator.Indices[indexCount + 5] = vertexCount + 3;
+                        tesselator.Indices[tesselator.IndexCount] = tesselator.VertexCount;
+                        tesselator.Indices[tesselator.IndexCount + 1] = tesselator.VertexCount + 1;
+                        tesselator.Indices[tesselator.IndexCount + 2] = tesselator.VertexCount + 2;
+                        tesselator.Indices[tesselator.IndexCount + 3] = tesselator.VertexCount;
+                        tesselator.Indices[tesselator.IndexCount + 4] = tesselator.VertexCount + 2;
+                        tesselator.Indices[tesselator.IndexCount + 5] = tesselator.VertexCount + 3;
 
-                        tesselator.Colors[vertexCount] = Tesselator.XMinusShade;
-                        tesselator.Colors[vertexCount + 1] = Tesselator.XMinusShade;
-                        tesselator.Colors[vertexCount + 2] = Tesselator.XMinusShade;
-                        tesselator.Colors[vertexCount + 3] = Tesselator.XMinusShade;
+                        tesselator.Colors[tesselator.VertexCount] = Tesselator.XMinusShade;
+                        tesselator.Colors[tesselator.VertexCount + 1] = Tesselator.XMinusShade;
+                        tesselator.Colors[tesselator.VertexCount + 2] = Tesselator.XMinusShade;
+                        tesselator.Colors[tesselator.VertexCount + 3] = Tesselator.XMinusShade;
                         
-                        vertexCount += 4;
-                        indexCount += 6;
+                        tesselator.VertexCount += 4;
+                        tesselator.IndexCount += 6;
                     }
                     
                     bool needsXPlus = voxelWorld.GetVoxel(x + 1, y, z) == 0;
                     if (needsXPlus)
                     {
-                        tesselator.Vertices[vertexCount] = new Vector3(x + 1, y, z);
-                        tesselator.Vertices[vertexCount + 1] = new Vector3(x + 1, y, z + 1);
-                        tesselator.Vertices[vertexCount + 2] = new Vector3(x + 1, y + 1, z + 1);
-                        tesselator.Vertices[vertexCount + 3] = new Vector3(x + 1, y + 1, z);
+                        tesselator.Vertices[tesselator.VertexCount] = new Vector3(x + 1, y, z);
+                        tesselator.Vertices[tesselator.VertexCount + 1] = new Vector3(x + 1, y, z + 1);
+                        tesselator.Vertices[tesselator.VertexCount + 2] = new Vector3(x + 1, y + 1, z + 1);
+                        tesselator.Vertices[tesselator.VertexCount + 3] = new Vector3(x + 1, y + 1, z);
 
-                        tesselator.Indices[indexCount] = vertexCount;
-                        tesselator.Indices[indexCount + 1] = vertexCount + 2;
-                        tesselator.Indices[indexCount + 2] = vertexCount + 1;
-                        tesselator.Indices[indexCount + 3] = vertexCount;
-                        tesselator.Indices[indexCount + 4] = vertexCount + 3;
-                        tesselator.Indices[indexCount + 5] = vertexCount + 2;
+                        tesselator.Indices[tesselator.IndexCount] = tesselator.VertexCount;
+                        tesselator.Indices[tesselator.IndexCount + 1] = tesselator.VertexCount + 2;
+                        tesselator.Indices[tesselator.IndexCount + 2] = tesselator.VertexCount + 1;
+                        tesselator.Indices[tesselator.IndexCount + 3] = tesselator.VertexCount;
+                        tesselator.Indices[tesselator.IndexCount + 4] = tesselator.VertexCount + 3;
+                        tesselator.Indices[tesselator.IndexCount + 5] = tesselator.VertexCount + 2;
                         
-                        tesselator.Colors[vertexCount] = Tesselator.XPlusShade;
-                        tesselator.Colors[vertexCount + 1] = Tesselator.XPlusShade;
-                        tesselator.Colors[vertexCount + 2] = Tesselator.XPlusShade;
-                        tesselator.Colors[vertexCount + 3] = Tesselator.XPlusShade;
+                        tesselator.Colors[tesselator.VertexCount] = Tesselator.XPlusShade;
+                        tesselator.Colors[tesselator.VertexCount + 1] = Tesselator.XPlusShade;
+                        tesselator.Colors[tesselator.VertexCount + 2] = Tesselator.XPlusShade;
+                        tesselator.Colors[tesselator.VertexCount + 3] = Tesselator.XPlusShade;
                         
-                        vertexCount += 4;
-                        indexCount += 6;
+                        tesselator.VertexCount += 4;
+                        tesselator.IndexCount += 6;
                     }
                     
                     // Y
                     bool needsYMinus = voxelWorld.GetVoxel(x, y - 1, z) == 0;
                     if (needsYMinus)
                     {
-                        tesselator.Vertices[vertexCount] = new Vector3(x, y, z);
-                        tesselator.Vertices[vertexCount + 1] = new Vector3(x, y, z + 1);
-                        tesselator.Vertices[vertexCount + 2] = new Vector3(x + 1, y, z + 1);
-                        tesselator.Vertices[vertexCount + 3] = new Vector3(x + 1, y, z);
+                        tesselator.Vertices[tesselator.VertexCount] = new Vector3(x, y, z);
+                        tesselator.Vertices[tesselator.VertexCount + 1] = new Vector3(x, y, z + 1);
+                        tesselator.Vertices[tesselator.VertexCount + 2] = new Vector3(x + 1, y, z + 1);
+                        tesselator.Vertices[tesselator.VertexCount + 3] = new Vector3(x + 1, y, z);
 
-                        tesselator.Indices[indexCount] = vertexCount;
-                        tesselator.Indices[indexCount + 1] = vertexCount + 2;
-                        tesselator.Indices[indexCount + 2] = vertexCount + 1;
-                        tesselator.Indices[indexCount + 3] = vertexCount;
-                        tesselator.Indices[indexCount + 4] = vertexCount + 3;
-                        tesselator.Indices[indexCount + 5] = vertexCount + 2;
+                        tesselator.Indices[tesselator.IndexCount] = tesselator.VertexCount;
+                        tesselator.Indices[tesselator.IndexCount + 1] = tesselator.VertexCount + 2;
+                        tesselator.Indices[tesselator.IndexCount + 2] = tesselator.VertexCount + 1;
+                        tesselator.Indices[tesselator.IndexCount + 3] = tesselator.VertexCount;
+                        tesselator.Indices[tesselator.IndexCount + 4] = tesselator.VertexCount + 3;
+                        tesselator.Indices[tesselator.IndexCount + 5] = tesselator.VertexCount + 2;
                         
-                        tesselator.Colors[vertexCount] = Tesselator.YMinusShade;
-                        tesselator.Colors[vertexCount + 1] = Tesselator.YMinusShade;
-                        tesselator.Colors[vertexCount + 2] = Tesselator.YMinusShade;
-                        tesselator.Colors[vertexCount + 3] = Tesselator.YMinusShade;
+                        tesselator.Colors[tesselator.VertexCount] = Tesselator.YMinusShade;
+                        tesselator.Colors[tesselator.VertexCount + 1] = Tesselator.YMinusShade;
+                        tesselator.Colors[tesselator.VertexCount + 2] = Tesselator.YMinusShade;
+                        tesselator.Colors[tesselator.VertexCount + 3] = Tesselator.YMinusShade;
                         
-                        vertexCount += 4;
-                        indexCount += 6;
+                        tesselator.VertexCount += 4;
+                        tesselator.IndexCount += 6;
                     }
                     
                     bool needsYPlus = voxelWorld.GetVoxel(x, y + 1, z) == 0;
                     if (needsYPlus)
                     {
-                        tesselator.Vertices[vertexCount] = new Vector3(x, y + 1, z);
-                        tesselator.Vertices[vertexCount + 1] = new Vector3(x, y + 1, z + 1);
-                        tesselator.Vertices[vertexCount + 2] = new Vector3(x + 1, y + 1, z + 1);
-                        tesselator.Vertices[vertexCount + 3] = new Vector3(x + 1, y + 1, z);
+                        tesselator.Vertices[tesselator.VertexCount] = new Vector3(x, y + 1, z);
+                        tesselator.Vertices[tesselator.VertexCount + 1] = new Vector3(x, y + 1, z + 1);
+                        tesselator.Vertices[tesselator.VertexCount + 2] = new Vector3(x + 1, y + 1, z + 1);
+                        tesselator.Vertices[tesselator.VertexCount + 3] = new Vector3(x + 1, y + 1, z);
 
-                        tesselator.Indices[indexCount] = vertexCount;
-                        tesselator.Indices[indexCount + 1] = vertexCount + 1;
-                        tesselator.Indices[indexCount + 2] = vertexCount + 2;
-                        tesselator.Indices[indexCount + 3] = vertexCount;
-                        tesselator.Indices[indexCount + 4] = vertexCount + 2;
-                        tesselator.Indices[indexCount + 5] = vertexCount + 3;
+                        tesselator.Indices[tesselator.IndexCount] = tesselator.VertexCount;
+                        tesselator.Indices[tesselator.IndexCount + 1] = tesselator.VertexCount + 1;
+                        tesselator.Indices[tesselator.IndexCount + 2] = tesselator.VertexCount + 2;
+                        tesselator.Indices[tesselator.IndexCount + 3] = tesselator.VertexCount;
+                        tesselator.Indices[tesselator.IndexCount + 4] = tesselator.VertexCount + 2;
+                        tesselator.Indices[tesselator.IndexCount + 5] = tesselator.VertexCount + 3;
                         
-                        tesselator.Colors[vertexCount] = Tesselator.YPlusShade;
-                        tesselator.Colors[vertexCount + 1] = Tesselator.YPlusShade;
-                        tesselator.Colors[vertexCount + 2] = Tesselator.YPlusShade;
-                        tesselator.Colors[vertexCount + 3] = Tesselator.YPlusShade;
+                        tesselator.Colors[tesselator.VertexCount] = Tesselator.YPlusShade;
+                        tesselator.Colors[tesselator.VertexCount + 1] = Tesselator.YPlusShade;
+                        tesselator.Colors[tesselator.VertexCount + 2] = Tesselator.YPlusShade;
+                        tesselator.Colors[tesselator.VertexCount + 3] = Tesselator.YPlusShade;
                         
-                        vertexCount += 4;
-                        indexCount += 6;
+                        tesselator.VertexCount += 4;
+                        tesselator.IndexCount += 6;
                     }
                     
                     // Z
                     bool needsZMinus = voxelWorld.GetVoxel(x, y, z - 1) == 0;
                     if (needsZMinus)
                     {
-                        tesselator.Vertices[vertexCount] = new Vector3(x, y, z);
-                        tesselator.Vertices[vertexCount + 1] = new Vector3(x + 1, y, z);
-                        tesselator.Vertices[vertexCount + 2] = new Vector3(x + 1, y + 1, z);
-                        tesselator.Vertices[vertexCount + 3] = new Vector3(x, y + 1, z);
+                        tesselator.Vertices[tesselator.VertexCount] = new Vector3(x, y, z);
+                        tesselator.Vertices[tesselator.VertexCount + 1] = new Vector3(x + 1, y, z);
+                        tesselator.Vertices[tesselator.VertexCount + 2] = new Vector3(x + 1, y + 1, z);
+                        tesselator.Vertices[tesselator.VertexCount + 3] = new Vector3(x, y + 1, z);
 
-                        tesselator.Indices[indexCount] = vertexCount;
-                        tesselator.Indices[indexCount + 1] = vertexCount + 2;
-                        tesselator.Indices[indexCount + 2] = vertexCount + 1;
-                        tesselator.Indices[indexCount + 3] = vertexCount;
-                        tesselator.Indices[indexCount + 4] = vertexCount + 3;
-                        tesselator.Indices[indexCount + 5] = vertexCount + 2;
+                        tesselator.Indices[tesselator.IndexCount] = tesselator.VertexCount;
+                        tesselator.Indices[tesselator.IndexCount + 1] = tesselator.VertexCount + 2;
+                        tesselator.Indices[tesselator.IndexCount + 2] = tesselator.VertexCount + 1;
+                        tesselator.Indices[tesselator.IndexCount + 3] = tesselator.VertexCount;
+                        tesselator.Indices[tesselator.IndexCount + 4] = tesselator.VertexCount + 3;
+                        tesselator.Indices[tesselator.IndexCount + 5] = tesselator.VertexCount + 2;
                         
-                        tesselator.Colors[vertexCount] = Tesselator.ZMinusShade;
-                        tesselator.Colors[vertexCount + 1] = Tesselator.ZMinusShade;
-                        tesselator.Colors[vertexCount + 2] = Tesselator.ZMinusShade;
-                        tesselator.Colors[vertexCount + 3] = Tesselator.ZMinusShade;
+                        tesselator.Colors[tesselator.VertexCount] = Tesselator.ZMinusShade;
+                        tesselator.Colors[tesselator.VertexCount + 1] = Tesselator.ZMinusShade;
+                        tesselator.Colors[tesselator.VertexCount + 2] = Tesselator.ZMinusShade;
+                        tesselator.Colors[tesselator.VertexCount + 3] = Tesselator.ZMinusShade;
                         
-                        vertexCount += 4;
-                        indexCount += 6;
+                        tesselator.VertexCount += 4;
+                        tesselator.IndexCount += 6;
                     }
                     
                     bool needsZPlus = voxelWorld.GetVoxel(x, y, z + 1) == 0;
                     if (needsZPlus)
                     {
-                        tesselator.Vertices[vertexCount] = new Vector3(x, y, z + 1);
-                        tesselator.Vertices[vertexCount + 1] = new Vector3(x + 1, y, z + 1);
-                        tesselator.Vertices[vertexCount + 2] = new Vector3(x + 1, y + 1, z + 1);
-                        tesselator.Vertices[vertexCount + 3] = new Vector3(x, y + 1, z + 1);
+                        tesselator.Vertices[tesselator.VertexCount] = new Vector3(x, y, z + 1);
+                        tesselator.Vertices[tesselator.VertexCount + 1] = new Vector3(x + 1, y, z + 1);
+                        tesselator.Vertices[tesselator.VertexCount + 2] = new Vector3(x + 1, y + 1, z + 1);
+                        tesselator.Vertices[tesselator.VertexCount + 3] = new Vector3(x, y + 1, z + 1);
 
-                        tesselator.Indices[indexCount] = vertexCount;
-                        tesselator.Indices[indexCount + 1] = vertexCount + 1;
-                        tesselator.Indices[indexCount + 2] = vertexCount + 2;
-                        tesselator.Indices[indexCount + 3] = vertexCount;
-                        tesselator.Indices[indexCount + 4] = vertexCount + 2;
-                        tesselator.Indices[indexCount + 5] = vertexCount + 3;
+                        tesselator.Indices[tesselator.IndexCount] = tesselator.VertexCount;
+                        tesselator.Indices[tesselator.IndexCount + 1] = tesselator.VertexCount + 1;
+                        tesselator.Indices[tesselator.IndexCount + 2] = tesselator.VertexCount + 2;
+                        tesselator.Indices[tesselator.IndexCount + 3] = tesselator.VertexCount;
+                        tesselator.Indices[tesselator.IndexCount + 4] = tesselator.VertexCount + 2;
+                        tesselator.Indices[tesselator.IndexCount + 5] = tesselator.VertexCount + 3;
                         
-                        tesselator.Colors[vertexCount] = Tesselator.ZPlusShade;
-                        tesselator.Colors[vertexCount + 1] = Tesselator.ZPlusShade;
-                        tesselator.Colors[vertexCount + 2] = Tesselator.ZPlusShade;
-                        tesselator.Colors[vertexCount + 3] = Tesselator.ZPlusShade;
+                        tesselator.Colors[tesselator.VertexCount] = Tesselator.ZPlusShade;
+                        tesselator.Colors[tesselator.VertexCount + 1] = Tesselator.ZPlusShade;
+                        tesselator.Colors[tesselator.VertexCount + 2] = Tesselator.ZPlusShade;
+                        tesselator.Colors[tesselator.VertexCount + 3] = Tesselator.ZPlusShade;
                         
-                        vertexCount += 4;
-                        indexCount += 6;
+                        tesselator.VertexCount += 4;
+                        tesselator.IndexCount += 6;
                     }
                     
                 }
             }
         }
-        
+    }
+
+    public void Swap(Tesselator tesselator)
+    {
         _mesh.Clear();
-        var bounds = new Bounds();
-        bounds.min = new Vector3(0, MinVisibleY, 0);
-        bounds.max = new Vector3(Size, MaxVisibleY, Size);
-        _mesh.bounds = bounds;
-        _mesh.SetVertices(tesselator.Vertices, 0, vertexCount, MeshUpdateFlags.DontValidateIndices);
-        _mesh.SetColors(tesselator.Colors, 0, vertexCount);
-        _mesh.SetIndices(tesselator.Indices, 0, indexCount, MeshTopology.Triangles, 0, false);
+        // bounds.min = new Vector3(0, MinVisibleY, 0);
+        // bounds.max = new Vector3(Size, MaxVisibleY, Size);
+        _mesh.SetVertices(tesselator.Vertices, 0, tesselator.VertexCount, MeshUpdateFlags.DontValidateIndices);
+        _mesh.SetColors(tesselator.Colors, 0, tesselator.VertexCount);
+        _mesh.SetIndices(tesselator.Indices, 0, tesselator.IndexCount, MeshTopology.Triangles, 0, false);
+    }
+
+    public void MarkDirty()
+    {
+        IsDirty = true;
     }
 }

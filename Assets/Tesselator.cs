@@ -9,14 +9,17 @@ public class Tesselator
     private const int MaxVertices = MaxFaces * 4;
     private const int MaxIndices = MaxFaces * 6;
 
-    public static readonly Color XPlusShade = new Color(0.9f, 0.9f, 0.9f, 1.0f);
-    public static readonly Color XMinusShade = new Color(0.8f, 0.8f, 0.8f, 1.0f);
-    public static readonly Color YPlusShade = new Color(1.0f, 1.0f, 1.0f, 1.0f);
-    public static readonly Color YMinusShade = new Color(0.6f, 0.6f, 0.6f, 1.0f);
-    public static readonly Color ZPlusShade = new Color(0.8f, 0.8f, 0.8f, 1.0f);
-    public static readonly Color ZMinusShade = new Color(0.7f, 0.7f, 0.7f, 1.0f);
+    public static readonly Color XPlusShade = new(0.9f, 0.9f, 0.9f, 1.0f);
+    public static readonly Color XMinusShade = new(0.8f, 0.8f, 0.8f, 1.0f);
+    public static readonly Color YPlusShade = new(1.0f, 1.0f, 1.0f, 1.0f);
+    public static readonly Color YMinusShade = new(0.6f, 0.6f, 0.6f, 1.0f);
+    public static readonly Color ZPlusShade = new(0.8f, 0.8f, 0.8f, 1.0f);
+    public static readonly Color ZMinusShade = new(0.7f, 0.7f, 0.7f, 1.0f);
     
-    public Vector3[] Vertices = new Vector3[MaxVertices];
-    public int[] Indices = new int[MaxIndices];
-    public Color[] Colors = new Color[MaxVertices];
+    public readonly Vector3[] Vertices = new Vector3[MaxVertices];
+    public readonly int[] Indices = new int[MaxIndices];
+    public readonly Color[] Colors = new Color[MaxVertices];
+
+    public int VertexCount = 0;
+    public int IndexCount = 0;
 }
