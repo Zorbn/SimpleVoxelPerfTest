@@ -1,12 +1,13 @@
 ﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Runtime.CompilerServices;
 using System.Threading;
 using UnityEngine;
 
 public class VoxelWorld : MonoBehaviour
 {
-    public const int SizeInChunks = 40;
+    private const int SizeInChunks = 40;
     private const int RadiusInChunks = SizeInChunks / 2;
     private const int Size = SizeInChunks * VoxelChunk.Size;
     private const int Height = VoxelChunk.Height;
@@ -28,7 +29,7 @@ public class VoxelWorld : MonoBehaviour
 
     private void Start()
     {
-        player.transform.position = new Vector3(Size * 0.5f, 0, Size * 0.5f);
+        player.transform.position = new Vector3(Size * 0.5f, Height - PlayerMovement.Size.y, Size * 0.5f);
         UpdateLoadedChunks();
 
         _meshingThread = new Thread(MeshingProc);
@@ -177,12 +178,19 @@ public class VoxelWorld : MonoBehaviour
     {
         UpdateLoadedChunks();
         
+        // TODO: Try if instead of while (limits processing to once per frame)
         while (_swappingJobs.TryPeek(out var chunk))
         {
             chunk.Swap();
             
             _swappingJobs.TryDequeue(out _);
         }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public bool IsBlockOccupied(int x, int y, int z)
+    {
+        return GetVoxel(x, y, z) != 0;
     }
 
     public byte GetVoxel(int x, int y, int z)
